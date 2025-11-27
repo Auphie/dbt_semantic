@@ -1,0 +1,100 @@
+name: lint dbt project on pr
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  dbt_lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Fetch depth 0 is required to get history needed to determine base branch commit
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dbt and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install dbt-core sqlfluff sqlfluff-templater-dbt
+      # details on linter rules: https://docs.sqlfluff.com/en/stable/rules.html
+      - name: Lint SQL with SQLFluff
+        run: sqlfluff lint models/  --dialect postgres --ignore templating
+
+  dbt-build-test:
+    needs: dbt_lint
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: dbt_ci
+          POSTGRES_USER: dbt
+          POSTGRES_PASSWORD: dbtpass
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd="pg_isready -U dbt -d dbt_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Base Branch dbt Artifacts
+        # This action fetches the artifacts uploaded by the main branch's CI run.
+        # It's crucial for the '--state' flag to point to this base manifest.
+        uses: actions/download-artifact@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dbt and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install dbt-core dbt-postgres
+      - name: Construct dbt-postgres settings for CI
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << EOF
+          dbt_semantic:
+            target: ci
+            outputs:
+              ci:
+                type: postgres
+                host: localhost
+                user: dbt
+                password: dbtpass
+                port: 5432
+                dbname: dbt_ci
+                schema: dbt_semantic_ci
+                threads: 4
+          EOF
+      - name: dbt environment build
+        run: |
+          dbt deps
+          dbt seed
+      - name: Run dbt build (slim CI example)
+        run: |
+          # 1. Now we defer to 'base-artifacts', avoiding the conflict with the 'target' output directory.
+          if [ -f base-artifacts/manifest.json ]; then
+            echo "Found prior manifest — running slim CI with defer"
+            dbt run --select state:modified+ --defer --state base-artifacts
+          else
+            echo "No prior manifest — running full run (first CI run or missing artifact)"
+            dbt run
+          fi
+      - name: Upload artifacts/report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-state
+          path: target
+
