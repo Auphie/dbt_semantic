@@ -1,4 +1,4 @@
-name: lint dbt project on pr
+name: Linter and CI process on pr
 
 on:
   pull_request:
@@ -47,11 +47,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Download Base Branch dbt Artifacts
-        # This action fetches the artifacts uploaded by the main branch's CI run.
-        # It's crucial for the '--state' flag to point to this base manifest.
-        uses: actions/download-artifact@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -91,10 +86,3 @@ jobs:
             echo "No prior manifest — running full run (first CI run or missing artifact)"
             dbt run
           fi
-      - name: Upload artifacts/report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dbt-state
-          path: target
-
